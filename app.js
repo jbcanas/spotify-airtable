@@ -51,6 +51,8 @@ const doRequest = async (args, func, retries) => {
 (async () => {
   await deleteRecords('Albums');
   await deleteRecords('Tracks');
+  await deleteRecords('Genres');
+  await deleteRecords('Related Artists');
   await processSpotify();
 })();
 
@@ -58,11 +60,11 @@ function deleteRecords(table) {
   return base(table).select({
     view: "Grid view"
   }).eachPage(function page(records, fetchNextPage) {
-    records.forEach(function(record) {
-      airtableLimiter.removeTokens(1, () => {
-        record.destroy();
-      }, true);
-    });
+    airtableLimiter.removeTokens(1, () => {
+      asynclib.each(records, (record) => {
+          record.destroy();
+      });
+    }, true);
 
     fetchNextPage();
   }, function done(err) {
@@ -71,7 +73,6 @@ function deleteRecords(table) {
 }
 
 function processSpotify() {
-
   return base('Artists').select({
     view: "Grid view",
     // maxRecords: 1,
@@ -86,9 +87,39 @@ function processSpotify() {
           airtableLimiter.removeTokens(1, () => {
             base('Artists').update(record.getId(), {
               "Spotify ID": resultArtist.id,
-              "Spotify URL":resultArtist.external_urls.spotify
+              "Spotify URL": resultArtist.external_urls.spotify
             }, function(err) {
               if (err) { console.error(err); }
+
+              if (resultArtist.genres.length > 0) {
+                asynclib.each(resultArtist.genres, (genre) => {
+                  base('Genres').create({
+                    "Name": genre,
+                    "Artist": [recordID]
+                  }, function(err) {
+                    if (err) { console.error(err); }
+                  });
+                });
+              }
+
+              doRequest(resultArtist.id, 'getArtistRelatedArtists', 1).then((response) => {
+                if (response.body.artists.length > 0) {
+                  asynclib.each(response.body.artists, (artist) => {
+                    base('Related Artists').create({
+                      "Name": artist.name,
+                      "Artist": [recordID],
+                      "Spotify ID": artist.id,
+                      "Spotify URL": artist.external_urls.spotify
+                    }, function(err) {
+                      if (err) {
+                        console.error(err);
+                      }
+                    });
+                  });
+                }
+              }).catch((err) => {
+                console.log(err);
+              });
             });
           }, true);
 
